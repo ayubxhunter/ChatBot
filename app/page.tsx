@@ -17,6 +17,8 @@ export default function Home() {
   ]);
   const [message, setMessage] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [remainingRequests, setRemainingRequests] = useState<number | null>(null);
+  const [resetTime, setResetTime] = useState<number | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -29,16 +31,25 @@ export default function Home() {
   }, [messages]);
 
   const sendMessage = async () => {
+    if (remainingRequests !== null && remainingRequests <= 0) {
+      const timeUntilResetMinutes = resetTime !== null ? Math.ceil(resetTime / 1000 / 60) : 0;
+      setMessages((messages) => [
+        ...messages,
+        { role: 'assistant', content: `No more questions! Check back in ${timeUntilResetMinutes} minute(s).` },
+      ]);
+      return;
+    }
+  
     if (!message.trim() || isLoading) return;
     setIsLoading(true);
-
+  
     setMessage('');
     setMessages((messages) => [
       ...messages,
       { role: 'user', content: message },
       { role: 'assistant', content: '' },
     ]);
-
+  
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -47,32 +58,29 @@ export default function Home() {
         },
         body: JSON.stringify([...messages, { role: 'user', content: message }]),
       });
-
-      if (!response.ok) {
-        throw new Error('Network response was not ok');
+  
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        throw new Error(`Expected JSON response, but received: ${contentType}`);
       }
-
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-
-      if (!reader) {
-        throw new Error('Failed to get reader from response body');
-      }
-
-      let assistantMessage = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const text = decoder.decode(value, { stream: true });
-        assistantMessage += text;
-        setMessages((messages) => {
-          const lastMessage = messages[messages.length - 1];
-          const otherMessages = messages.slice(0, messages.length - 1);
-          return [
-            ...otherMessages,
-            { ...lastMessage, content: assistantMessage },
-          ];
-        });
+  
+      const data = await response.json();
+  
+      if (!response.ok || data.error) {
+        console.error('Error response from API:', data.message || 'Unknown error');
+        const timeUntilReset = data.timeUntilReset;
+        setResetTime(timeUntilReset);
+        const timeUntilResetMinutes = Math.ceil(timeUntilReset / 1000 / 60);
+        setMessages((messages) => [
+          ...messages,
+          { role: 'assistant', content: `No more questions! Check back in ${timeUntilResetMinutes} minute(s).` },
+        ]);
+      } else {
+        setMessages((messages) => [
+          ...messages,
+          { role: 'assistant', content: data.message },
+        ]);
+        setRemainingRequests(data.remainingRequests);
       }
     } catch (error) {
       console.error('Error:', error);
@@ -81,7 +89,7 @@ export default function Home() {
         { role: 'assistant', content: "I'm sorry, but I encountered an error. Please try again later." },
       ]);
     }
-
+  
     setIsLoading(false);
   };
 
@@ -100,9 +108,17 @@ export default function Home() {
       flexDirection="column"
       justifyContent="center"
       alignItems="center"
-      sx={{ backgroundColor: '#f5f5f5', padding: '20px' }}
+      sx={{
+        backgroundImage: `
+          linear-gradient(135deg, #ff0000 0%, #ff0000 15%, rgba(255, 0, 0, 0) 30%, rgba(0, 0, 0, 0.7) 45%, rgba(255, 255, 255, 0.7) 60%, rgba(0, 128, 0, 0.7) 75%),
+          linear-gradient(90deg, rgba(0, 0, 0, 0.7), rgba(255, 255, 255, 0.7), rgba(0, 128, 0, 0.7))
+        `,
+        backgroundSize: 'cover',
+        backgroundRepeat: 'no-repeat',
+        padding: '20px',
+      }}
     >
-      <Typography variant="h4" sx={{ marginBottom: '20px', color: '#333' }}>
+      <Typography variant="h4" sx={{ marginBottom: '20px', color: '#ffffff' }}>
         Arabic Language Partner
       </Typography>
       <Stack
@@ -110,7 +126,7 @@ export default function Home() {
         width="100%"
         maxWidth="500px"
         height="600px"
-        boxShadow="0px 4px 10px rgba(0, 0, 0, 0.1)"
+        boxShadow="0px 8px 20px rgba(0, 0, 0, 0.3)"
         borderRadius="12px"
         sx={{ backgroundColor: '#ffffff', padding: '20px' }}
       >
@@ -155,6 +171,11 @@ export default function Home() {
           ))}
           <div ref={messagesEndRef} />
         </Stack>
+        {remainingRequests !== null && (
+          <Typography variant="body2" sx={{ color: '#333', textAlign: 'center', marginBottom: '10px' }}>
+            You have {remainingRequests} request(s) left.
+          </Typography>
+        )}
         <Stack direction={'row'} spacing={2}>
           <TextField
             variant="outlined"
@@ -165,7 +186,7 @@ export default function Home() {
               setMessage(e.target.value)
             }
             onKeyPress={handleKeyPress}
-            disabled={isLoading}
+            disabled={isLoading || (remainingRequests !== null && remainingRequests <= 0)}
             sx={{
               backgroundColor: '#f9f9f9',
               borderRadius: '8px',
@@ -177,7 +198,7 @@ export default function Home() {
           <Button
             variant="contained"
             onClick={sendMessage}
-            disabled={isLoading}
+            disabled={isLoading || (remainingRequests !== null && remainingRequests <= 0)}
             sx={{
               backgroundColor: isLoading ? '#ccc' : '#007bff',
               color: '#ffffff',
